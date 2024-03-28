@@ -1,2 +1,4 @@
 aws-snapshot-manager/custom_config.yaml
 aws-snapshot-manager/default_config.yaml
+aws-snapshot-manager/__pycache__/snapshot_manager.cpython-310.pyc
+aws-snapshot-manager/default_config.yaml

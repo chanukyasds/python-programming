@@ -1,4 +1,4 @@
 default_copy_region: "eu-central-1"
 default_snapshot_kms_key_arn: "arn:aws:kms:eu-central-1:529564074216:key/6b447ae6-9a1a-4c83-9a8d-bf8f84c867ad"
-default_test_account_id: "None"
+default_test_account_id: "454464851268"
 default_snapshot_copy_identifier_suffix: "-copy"

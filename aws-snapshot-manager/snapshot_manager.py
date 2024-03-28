@@ -21,9 +21,9 @@ global_data = {}
 #functions
 def read_yaml():
     """function to read custom and default config files"""
-    with open('default_config.yaml', 'r', encoding=str) as file:
+    with open('default_config.yaml', 'r', encoding="utf-8") as file:
         defaults = yaml.safe_load(file)
-    with open('custom_config.yaml', 'r',encoding=str) as file:
+    with open('custom_config.yaml', 'r', encoding="utf-8") as file:
         config = yaml.safe_load(file)
     return defaults, config
 
@@ -144,7 +144,7 @@ def create_snapshot(snapshot_id=None):
                 DBSnapshotIdentifier=snapshot_identifier,
                 DBInstanceIdentifier=db_instance_identifier
             )
-            print("\nSnapshot {snapshot_identifier} created successfully!")
+            print(f"\nStarted creating {snapshot_identifier}")
         except ClientError:
             logging.error(traceback.format_exc())
             sys.exit()
@@ -154,7 +154,7 @@ def create_snapshot(snapshot_id=None):
 
 def delete_snapshot(snapshot_id):
     """function to delete a snapshot"""
-    if is_snapshot_exists(snapshot_id):
+    if is_snapshot_exists(snapshot_id) and is_snapshot_available(snapshot_id):
         try:
             rds_client.delete_db_snapshot(
                 DBSnapshotIdentifier=snapshot_id
@@ -211,8 +211,8 @@ def share_snapshot(snapshot_id):
             print(f"\nNo snapshot found with name {snapshot_id}.")
         print("\nUse option --snapshot-list to list all snapshots")
 
-def retain_snapshot(snapshot_id):
-    """function to retain a snapshot"""
+def revoke_snapshot(snapshot_id):
+    """function to revoke a shared snapshot"""
     target_aws_account = global_data['target_aws_account']
     # we don't need to check explicitly about to check if a snapshot is already retained
     # aws won't throw error even we share to same account
@@ -223,7 +223,7 @@ def retain_snapshot(snapshot_id):
                 AttributeName='restore',
                 ValuesToRemove=[target_aws_account]
             )
-            print("\nSnapshot Retained successfully")
+            print("\nSnapshot Revoked successfully")
         except ClientError:
             logging.error(traceback.format_exc())
             sys.exit()
@@ -234,33 +234,17 @@ def retain_snapshot(snapshot_id):
 
 def info_snapshot(snapshot_id):
     """function to info a snapshot"""
-    if is_snapshot_exists(snapshot_id):
+    if is_snapshot_exists(snapshot_id) and is_snapshot_available(snapshot_id):
         try:
             response = rds_client.describe_db_snapshots(
                 DBSnapshotIdentifier=snapshot_id
             )
-            snapshots = response['DBSnapshots']
-            if snapshots:
-                snapshot_data = [["DB Identifier" ,
-                                  "Snapshot Identifier",
-                                  "Snapshot Type",
-                                  "Status",
-                                  "Creation Time"]]
-                for snapshot in snapshots:
-                    check_create_time = snapshot.get('SnapshotCreateTime')
-                    if check_create_time:
-                        snapshotcreatetime= check_create_time.strftime("%Y-%m-%d %H:%M:%S")
-                    else:
-                        snapshotcreatetime = ""
-                    snapshot_data.append([
-                        snapshot['DBInstanceIdentifier'],
-                        snapshot['DBSnapshotIdentifier'],
-                        snapshot['SnapshotType'],
-                        snapshot['Status'],
-                        snapshotcreatetime
-                    ])
-                print("\nSnapshot Info:")
-                print(tabulate(snapshot_data, headers="firstrow", tablefmt="grid"))
+            snapshot_meta_dict = response['DBSnapshots'][0]
+            snapshot_data = [["Property","Value"]]
+            for each_meta_property in snapshot_meta_dict:
+                snapshot_data.append([each_meta_property,snapshot_meta_dict[each_meta_property]])
+            print("\nSnapshot Info:")
+            print(tabulate(snapshot_data, headers="firstrow", tablefmt="grid"))
         except ClientError:
             logging.error(traceback.format_exc())
             sys.exit()
@@ -311,17 +295,23 @@ def list_shared_snapshots():
         if snapshots:
             snapshot_data = [["DB Identifier" ,"Snapshot Identifier", "Shared To" ]]
             for snapshot in snapshots:
-                snapshot_atts = rds_client.describe_db_snapshot_attributes(
-                    DBSnapshotIdentifier=snapshot['DBSnapshotIdentifier'])
-                shared_accounts = [
-                    attr['AttributeValues'][0]
-                    for attr in snapshot_atts['DBSnapshotAttributesResult']['DBSnapshotAttributes']
-                    if attr['AttributeName'] == 'restore']
-                snapshot_data.append([
-                    snapshot['DBInstanceIdentifier'],
-                    snapshot['DBSnapshotIdentifier'],
-                    ','.join(shared_accounts)
-                ])
+                try:
+                    snapshot_atts = rds_client.describe_db_snapshot_attributes(
+                        DBSnapshotIdentifier=snapshot['DBSnapshotIdentifier'])
+                    shared_accounts = [
+                        attr['AttributeValues'][0]
+                        for attr in snapshot_atts['DBSnapshotAttributesResult']['DBSnapshotAttributes']
+                        if attr['AttributeName'] == 'restore']
+                    snapshot_data.append([
+                        snapshot['DBInstanceIdentifier'],
+                        snapshot['DBSnapshotIdentifier'],
+                        ','.join(shared_accounts)
+                    ])
+                except ClientError:
+                    pass
+                except IndexError:
+                    pass
+    # don't need to report error because there may be chances no snapshot is shared at the moment
             print("\nAll shared snapshots:")
             print(tabulate(snapshot_data, headers="firstrow", tablefmt="grid"))
         else:
@@ -341,14 +331,23 @@ def delete_snapshot_all():
             )
             snapshots = response['DBSnapshots']
             if snapshots:
-                snapshot_data = [["Snapshot Identifier"]]
+                snapshot_data = [["Snapshot Identifier","Deleted","Info"]]
                 for snapshot in snapshots:
-                    response = rds_client.delete_db_snapshot(
-                            DBSnapshotIdentifier=snapshot['DBSnapshotIdentifier'])
-                    snapshot_data.append([
-                        snapshot['DBSnapshotIdentifier']
-                    ])
-                print(f"\nList of Snapshots belongs to {db_instance_identifier} has been deleted")
+                    if is_snapshot_available(snapshot['DBSnapshotIdentifier']):
+                        response = rds_client.delete_db_snapshot(
+                                DBSnapshotIdentifier=snapshot['DBSnapshotIdentifier'])
+                        snapshot_data.append([
+                            snapshot['DBSnapshotIdentifier'],
+                            "Yes",
+                            "-"
+                        ])
+                    else:
+                        snapshot_data.append([
+                            snapshot['DBSnapshotIdentifier'],
+                            "No",
+                            "Not in available state"
+                        ])
+                print(f"\nAffected snapshots belong to {db_instance_identifier}")
                 print(tabulate(snapshot_data, headers="firstrow", tablefmt="grid"))
             else:
                 print("No snapshots found")
@@ -380,10 +379,10 @@ def main():
                        type=str,
                        nargs='?',
                        help='Share a snapshot with another account')
-    group.add_argument('--snapshot-retain',
+    group.add_argument('--snapshot-revoke',
                        type=str,
                        nargs='?',
-                       help='Retain a shared snapshot')
+                       help='Revoke a shared snapshot')
     group.add_argument('--snapshot-info',
                        type=str,
                        nargs='?',
@@ -413,8 +412,8 @@ def main():
         copy_snapshot(args.snapshot_copy)
     elif args.snapshot_share:
         share_snapshot(args.snapshot_share)
-    elif args.snapshot_retain:
-        retain_snapshot(args.snapshot_retain)
+    elif args.snapshot_revoke:
+        revoke_snapshot(args.snapshot_revoke)
     elif args.snapshot_info:
         info_snapshot(args.snapshot_info)
     elif args.snapshot_list:
