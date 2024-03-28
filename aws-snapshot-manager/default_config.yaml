@@ -1,0 +1,4 @@
+default_copy_region: ""
+default_snapshot_kms_key_arn: ""
+default_test_account_id: ""
+default_snapshot_copy_identifier_suffix: "-copy"
